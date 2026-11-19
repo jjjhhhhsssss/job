@@ -55,3 +55,7 @@ scripts/lib/sources.mjs         사이트별 수집기
 scripts/lib/util.mjs            HTML→텍스트, 항목 추출, 분야·지역 분류
 .github/workflows/collect.yml   매일 자동 수집
 ```
+
+## 유의사항
+
+- 개인정보, 비밀번호, API Key 등 민감한 정보는 업로드하지 마세요.
