@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>마감임박 채용 모아보기</title>
+  <meta name="description" content="여러 채용 사이트의 공고를 마감일 순으로 한 번에 보는 취준생용 사이트" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232563eb'/%3E%3Cpath d='M9 8h14v3H9zm0 6.5h14v3H9zM9 21h9v3H9z' fill='white'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="top">
+    <div class="wrap">
+      <h1>마감임박 채용 모아보기</h1>
+      <p class="sub">연구·R&amp;D · 품질(QA/QC) · 생산·제조 · 바이오·제약 · 사무 공고를 마감일 순으로 모았어요.</p>
+      <p class="meta" id="meta">불러오는 중…</p>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section class="filters" aria-label="검색 및 필터">
+      <form id="searchForm" class="search">
+        <input id="q" type="search" placeholder="회사명, 공고명, 업무 내용으로 검색" aria-label="검색어" />
+        <button type="submit">검색</button>
+        <button type="button" id="reset" class="ghost">초기화</button>
+      </form>
+
+      <div class="frow">
+        <span class="flabel">모집분야</span>
+        <div class="chips" id="fieldChips"></div>
+      </div>
+      <div class="frow">
+        <span class="flabel">지역</span>
+        <div class="chips" id="regionChips"></div>
+      </div>
+    </section>
+
+    <div class="bar">
+      <p id="count"></p>
+      <p class="hint">마감일이 가까운 순 · 20개씩 보기</p>
+    </div>
+
+    <div class="tablebox">
+      <table>
+        <thead>
+          <tr>
+            <th class="c-co">회사명</th>
+            <th class="c-field">모집분야</th>
+            <th class="c-text">담당업무</th>
+            <th class="c-text">자격요건</th>
+            <th class="c-text">우대사항</th>
+            <th class="c-emp">채용 형태</th>
+            <th class="c-loc">근무지</th>
+            <th class="c-sal">연봉</th>
+            <th class="c-dl">마감일 및 시간</th>
+            <th class="c-link">지원 사이트</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <p class="empty" id="empty" hidden>조건에 맞는 공고가 없어요.</p>
+    </div>
+
+    <nav class="pager" id="pager" aria-label="페이지"></nav>
+
+    <footer class="foot">
+      <p id="sources"></p>
+      <p>공고 내용은 각 사이트에서 자동으로 모은 것이라 일부 항목이 빠지거나 다를 수 있어요. 지원 전에 원문 공고를 꼭 확인하세요.</p>
+    </footer>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
