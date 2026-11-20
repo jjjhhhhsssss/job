@@ -5,9 +5,19 @@
   const FIELD_ORDER = ["연구·R&D", "품질관리(QA·QC)", "생산·제조", "바이오·제약", "화학·소재", "식품", "환경·안전", "농업·축산", "사무·관리"];
   const REGION_ORDER = ["서울", "경기", "인천", "대전", "세종", "충북", "충남", "광주·전남", "전북", "대구", "경북", "부산", "울산", "경남", "강원", "제주", "해외", "전국·기타"];
   const SOURCES = ["잡다", "자소설닷컴", "사람인", "잡코리아", "고용24", "잡알리오"];
+  const EMP_ORDER = ["정규직", "계약직", "무기계약직", "기간제", "인턴", "파견직", "위촉직", "프리랜서", "시간제", "아르바이트", "일용직", "미표기"];
+  // 채용 형태 문자열 → 필터용 목록 ("무기계약직"을 "계약직"으로 잘못 세지 않게 먼저 처리)
+  function empTypes(s) {
+    if (!s) return ["미표기"];
+    const out = [];
+    let rest = s;
+    if (/무기계약/.test(rest)) { out.push("무기계약직"); rest = rest.replace(/무기계약직?/g, ""); }
+    for (const t of EMP_ORDER) if (t !== "무기계약직" && t !== "미표기" && rest.includes(t)) out.push(t);
+    return out.length ? out : ["미표기"];
+  }
 
   const $ = (id) => document.getElementById(id);
-  const state = { q: "", fields: new Set(), regions: new Set(), page: 1 };
+  const state = { q: "", fields: new Set(), regions: new Set(), emps: new Set(), page: 1 };
   let data = { jobs: [] };
   let base = []; // 접속일 기준 마감 7일 이내 공고
 
@@ -68,6 +78,7 @@
     return base.filter((j) => {
       if (state.fields.size && !(j.fields || []).some((f) => state.fields.has(f))) return false;
       if (state.regions.size && !(j.regions || []).some((r) => state.regions.has(r))) return false;
+      if (state.emps.size && !j.emps.some((t) => state.emps.has(t))) return false;
       if (q) {
         const hay = [j.company, j.title, j.duty, j.req, j.pref, j.location, (j.fields || []).join(" ")].join(" ").toLowerCase();
         if (!q.split(/\s+/).every((w) => hay.includes(w))) return false;
@@ -101,6 +112,7 @@
 
     chips($("fieldChips"), FIELD_ORDER, "fields", countBy(base, "fields"));
     chips($("regionChips"), REGION_ORDER, "regions", countBy(base, "regions"));
+    chips($("empChips"), EMP_ORDER, "emps", countBy(base, "emps"));
     pager(pages);
 
     // 더보기 버튼: 잘린 칸만
@@ -141,6 +153,7 @@
       $("q").value = "";
       state.fields.clear();
       state.regions.clear();
+      state.emps.clear();
       state.page = 1;
       render();
     });
@@ -154,6 +167,7 @@
     };
     $("fieldChips").addEventListener("click", toggle("fields"));
     $("regionChips").addEventListener("click", toggle("regions"));
+    $("empChips").addEventListener("click", toggle("emps"));
     $("pager").addEventListener("click", (e) => {
       const b = e.target.closest("button[data-p]");
       if (!b || b.disabled) return;
@@ -176,6 +190,7 @@
     const limit = addDays(now.slice(0, 10), DAYS);
     base = (data.jobs || [])
       .filter((j) => j.deadline >= now && j.deadline.slice(0, 10) <= limit)
+      .map((j) => ({ ...j, emps: empTypes(j.empType) }))
       .sort((a, b) => a.deadline.localeCompare(b.deadline));
 
     const [d, t] = (data.collectedAt || "").split("T");
