@@ -20,6 +20,8 @@ const SOURCES = [
   ["잡코리아", S.jobkorea],
   ["고용24", S.work24],
   ["잡알리오", S.alio],
+  ["나라일터", S.gojobs],
+  ["클린아이 잡플러스", S.cleaneye],
 ];
 
 const normCo = (s) => s.replace(/\(주\)|㈜|주식회사|\(유\)|\(재\)|재단법인|사단법인|\s/g, "").toLowerCase();

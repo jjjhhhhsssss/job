@@ -1,6 +1,6 @@
 // 사이트별 수집기. 각 함수는 공통 형식의 공고 배열을 돌려준다.
 import {
-  http, sleep, htmlToText, clean, clip, kst, inferYear, nowKST,
+  http, sleep, htmlToText, clean, clip, kst, inferYear, nowKST, addDaysKST,
   extractSections, findProbation, findContract, findSalary, normEmpType, classify, toRegions,
 } from "./util.mjs";
 
@@ -15,7 +15,7 @@ const DELAY = 250;
 function make(p) {
   const text = p.fullText || "";
   const sec = text ? extractSections(text) : { duty: "", req: "", must: "", pref: "", reqAll: "" };
-  const fields = classify({ title: p.title, category: p.category || "", body: text, requirement: sec.reqAll + " " + (p.req || "") });
+  const fields = p.fields !== undefined ? p.fields : classify({ title: p.title, category: p.category || "", body: text, requirement: sec.reqAll + " " + (p.req || "") });
   if (!fields) return null;
   const emp = normEmpType(p.empType || "");
   const contract = p.contract || (/계약|인턴|기간제|파견/.test(emp) ? findContract(`${p.title}\n${p.empType || ""}\n${text}`) : "");
@@ -384,6 +384,177 @@ export async function alio({ limitDate, log }) {
       contract: /계약|인턴|비정규/.test(emp) ? findContract(all) : "",
       location: p.location || get("근무지"),
       salary: /\d/.test(sal) ? sal : "공고문 참조",
+      deadline: p.deadline, url,
+    });
+    if (r) res.push(r);
+  }
+  return res;
+}
+
+// 합격자 발표·시험 일정 등 채용 공고가 아닌 안내문
+const NOTICE_ONLY = /합격자|합격\s*\(?예정|발표|결과\s*(공고|안내|알림)|(면접|필기|실기|서류)\s*(시험|전형)?\s*(일정|장소|실시|시행|안내)|시험\s*(일정|장소|시행|실시)|응시\s*현황|경쟁률|취소\s*공고|채용\s*취소/;
+
+// 기관장·임원·고위직 모집 (취업준비생 대상이 아님)
+const EXEC_ONLY = /임원|비상임|비상근|기관장|상임이사|고위공무원|개방형\s*직위|사무처장|본부장|(원장|이사장|사장|감사|이사|소장|단장)\s*\)?\s*(공개)?\s*(모집|채용|초빙|공모)|선임직/;
+
+// 공공기관 공고 전용: 대상 분야가 아닌 직종 (조리원·집배원·시설관리원 등)
+const PUB_EXCLUDE = /조리원|조리실무|집배원|배달원|시설관리원|미화원|환경미화|안전요원|주차관리|단속|지도원|지킴이|안내원|안내도우미|민원안내|선거지원단|체육지도|수영강사|영양사|사회복지사|보육교사|청원경찰|방호원|운전원|당직|경비원|환경관리\s*경비|청사방호|환경관리[원사]|환경실무사|변호사|진료의사|의무사무관|진료|사서/;
+// 공공기관 공고의 상투어가 분야로 잘못 잡히지 않게 지운다 ('공무직'의 공무→생산, '임용시험'의 시험→연구 등)
+const PUB_NOISE = /사무소|사무처|사무국|공무직|공무원|임기제|(임용|채용|선발|경쟁|공개|경력)*\s*시험|공정선거|개방형/g;
+function pubClassify({ title = "", org = "", category = "", body = "" }) {
+  const t = (org ? title.split(org).join(" ") : title).replace(PUB_NOISE, " ");
+  return classify({ title: t, category: category.replace(PUB_NOISE, " "), body: body.replace(PUB_NOISE, " ") });
+}
+// 대상 밖 직종만 뽑는 공고인지 (예: "사무원, 환경관리사"처럼 대상 직종이 함께 있으면 남긴다)
+const PUB_EXCLUDE_G = new RegExp(PUB_EXCLUDE.source, "g");
+const onlyExcluded = (s = "", org = "") => PUB_EXCLUDE.test(s) && !pubClassify({ title: s.replace(PUB_EXCLUDE_G, " "), org });
+const pubSkip = (title, org = "") => NOTICE_ONLY.test(title) || EXEC_ONLY.test(title) || onlyExcluded(title, org);
+
+// ======================= 나라일터 (중앙부처·지자체·교육청·공공기관) =======================
+export async function gojobs({ limitDate, log }) {
+  // '마감일순' 정렬은 오늘 게시된 공고 안에서만 정렬돼서 쓸 수 없다.
+  // 최신 게시순으로 최근 30일치를 훑으며 마감 7일 이내인 공고를 고른다.
+  const since = addDaysKST(-30);
+  const seen = new Map();
+  for (let page = 1; page <= 400; page++) {
+    const url = `https://www.gojobs.go.kr/apmList.do?menuNo=401&searchJobsecode=020&pageIndex=${page}`;
+    let html;
+    try { html = await http(url); } catch (e) { if (page === 1) throw e; log(`나라일터 ${page}쪽 실패: ${e.message}`); break; }
+    const rows = html.split(/<tr[ >]/).filter((r) => /fn_apmView\(/.test(r));
+    if (!rows.length) break;
+    let old = 0;
+    for (const row of rows) {
+      const m = row.match(/fn_apmView\('(\w+)',\s*'(\d+)'\)"?[^>]*>([\s\S]*?)<\/a>/);
+      if (!m) continue;
+      const tds = [...row.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((x) => clean(x[1]));
+      const dates = tds.map((x) => x.match(/^(\d{4})-(\d{2})-(\d{2})$/)).filter(Boolean);
+      if (dates.length < 2) continue;
+      if (dates[0][0] < since) { old++; continue; }
+      const dm = dates[dates.length - 1];
+      const deadline = kst(+dm[1], +dm[2], +dm[3]);
+      const title = clean(m[3]);
+      if (!within(deadline, limitDate) || seen.has(m[2]) || pubSkip(title, tds[2])) continue;
+      seen.set(m[2], { code: m[1], sn: m[2], title, company: tds[2] || "", deadline });
+    }
+    if (old === rows.length) break;
+    await sleep(150);
+  }
+  log(`나라일터 목록 ${seen.size}건`);
+  const res = [];
+  for (const p of seen.values()) {
+    const view = p.code === "060" ? "smbView.do" : p.code === "INJAE" ? "apmViewNew.do" : "apmView.do";
+    const url = `https://www.gojobs.go.kr/${view}?menuNo=401&searchJobsecode=${p.code}&empmnsn=${p.sn}`;
+    let html = "";
+    try { html = await http(url); } catch {}
+    await sleep(DELAY);
+    const pairs = {};
+    for (const m of html.matchAll(/<th[^>]*>([\s\S]*?)<\/th>\s*<td[^>]*>([\s\S]*?)<\/td>/g)) {
+      const k = clean(m[1]);
+      if (k && !pairs[k]) pairs[k] = htmlToText(m[2]);
+    }
+    const grade = (pairs["채용직급"] || "").replace(/\n/g, ", ");
+    if (onlyExcluded(grade) || EXEC_ONLY.test(grade)) continue;
+    const empText = `${p.title} ${grade}`;
+    const r = make({
+      source: "나라일터", sid: p.sn,
+      company: pairs["기관명"] || p.company, title: p.title,
+      fields: pubClassify({ title: p.title, org: pairs["기관명"] || p.company, category: grade }),
+      category: grade,
+      duty: grade ? `채용직급: ${grade}` : "",
+      empType: empText + (/공무직/.test(empText) ? " 무기계약직" : "") + (/임기제/.test(empText) ? " 계약직" : ""),
+      location: pairs["근무지역"] || "",
+      salary: "공고문 참조",
+      deadline: p.deadline, url,
+    });
+    if (r) res.push(r);
+  }
+  return res;
+}
+
+// ======================= 클린아이 잡플러스 (지방공기업·지방 출자출연기관: 문화재단, 진흥원 등) =======================
+const CE_FIELD = {
+  700001: "사업관리 기획", 700002: "경영·회계·사무", 700003: "금융·보험", 700004: "교육·자연·사회과학", 700005: "법률·경찰·소방·교도·국방",
+  700007: "사회복지·종교", 700008: "문화·예술·디자인·방송", 700016: "재료 소재", 700017: "화학", 700018: "섬유·의복", 700021: "식품가공",
+  700022: "인쇄·목재·가구·공예", 700023: "환경·에너지·안전", 700024: "농림어업 농업", 700025: "연구", 700026: "기타",
+};
+// 대상이 아닌 모집분야: 보건·의료, 운전·운송, 영업판매, 경비·청소, 이용·숙박·여행·오락·스포츠, 음식서비스, 건설, 기계, 전기·전자, 정보통신
+// 사이트 모집분야 코드가 대상 분야와 바로 맞는 경우
+const CE_FIELDS = {
+  700002: ["사무·관리"], 700016: ["화학·소재"], 700017: ["화학·소재"], 700021: ["식품"],
+  700023: ["환경·안전"], 700024: ["농업·축산"], 700025: ["연구·R&D"],
+};
+const CE_SKIP = new Set(["700006", "700009", "700010", "700011", "700012", "700013", "700014", "700015", "700019", "700020"]);
+const CE_JOB = { 702001: "정규직", 702002: "무기계약직", 702003: "기간제", 702004: "계약직(전문)", 702005: "인턴", 702006: "계약직", 702007: "비상임" };
+const CE_CAREER = { 703001: "신입", 703002: "경력", 703003: "신입·경력" };
+const CE_PLACE = {
+  704001: "서울특별시", 704002: "부산광역시", 704003: "대구광역시", 704004: "인천광역시", 704005: "광주광역시", 704006: "대전광역시",
+  704007: "울산광역시", 704008: "세종특별자치시", 704009: "경기도", 704010: "강원특별자치도", 704011: "충청북도", 704012: "충청남도",
+  704013: "전북특별자치도", 704014: "전라남도", 704015: "경상북도", 704016: "경상남도", 704017: "제주특별자치도", 704018: "해외", 704019: "전남광주통합특별시",
+};
+const CE_PAY = {
+  706001: "1200만원 이하", 706002: "1200만원 이상", 706003: "1400만원 이상", 706004: "1600만원 이상", 706005: "1800만원 이상", 706006: "2000만원 이상",
+  706007: "2200만원 이상", 706008: "2600만원 이상", 706009: "2800만원 이상", 706010: "3000만원 이상", 706011: "3200만원 이상", 706012: "3400만원 이상",
+  706013: "3600만원 이상", 706014: "3800만원 이상", 706015: "4000만원 이상", 706016: "5000만원 이상", 706017: "6000만원 이상", 706018: "7000만원 이상",
+  706019: "8000만원 이상", 706020: "9000만원 이상", 706021: "1억원 이상",
+};
+export async function cleaneye({ limitDate, log }) {
+  const list = [];
+  for (let page = 1; page <= 60; page++) {
+    // status=709001: 모집중, pubEndDate: 접수마감일이 이 날짜 이전인 공고
+    const body = new URLSearchParams({ status: "709001", pubEndDate: limitDate, pageIndex: page }).toString();
+    let data;
+    try {
+      data = await http("https://job.cleaneye.go.kr/user/selectYpRecruitment.do", {
+        method: "POST", json: true, body,
+        headers: { "content-type": "application/x-www-form-urlencoded; charset=UTF-8", "x-requested-with": "XMLHttpRequest" },
+      });
+    } catch (e) { if (page === 1) throw e; log(`클린아이 ${page}쪽 실패: ${e.message}`); break; }
+    const rows = data.list || [];
+    if (!rows.length) break;
+    list.push(...rows);
+    if (page * 10 >= (data.cnt || 0)) break;
+    await sleep(DELAY);
+  }
+  const seen = new Map();
+  for (const e of list) {
+    const m = (e.pubEndDate || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!m) continue;
+    const deadline = kst(+m[1], +m[2], +m[3]);
+    const key = `${e.empyear}-${e.ypEntId}-${e.entSeq}`;
+    if (!within(deadline, limitDate) || seen.has(key) || pubSkip(e.entTitle || "", e.entName)) continue;
+    seen.set(key, { ...e, key, deadline });
+  }
+  log(`클린아이 목록 ${seen.size}건`);
+  const res = [];
+  for (const p of seen.values()) {
+    const url = `https://job.cleaneye.go.kr/user/ypCareersData.do?empyear=${p.empyear}&ypEntId=${p.ypEntId}&entSeq=${p.entSeq}`;
+    let html = "";
+    try { html = await http(url); } catch {}
+    await sleep(DELAY);
+    const v = (k) => (html.match(new RegExp(`var ${k} = '([^']*)'`)) || [])[1] || "";
+    const dd = (id) => { const t = htmlToText((html.match(new RegExp(`<dd id="${id}"[^>]*>([\\s\\S]*?)<\\/dd>`)) || [])[1] || ""); return t === "-" ? "" : t; };
+    const fieldCode = v("entRecruit");
+    const jobCode = v("jobType") || p.jobType;
+    const duty = dd("dutyDetail");
+    const position = dd("position");
+    if (CE_SKIP.has(fieldCode) || jobCode === "702007" || onlyExcluded(position) || EXEC_ONLY.test(position)) continue;
+    const lic = dd("entLicense");
+    const sido = CE_PLACE[v("workPlace")] || "";
+    const place = p.localName && p.localName.startsWith(sido) ? p.localName : [sido, p.localName || ""].filter(Boolean).join(" ");
+    const career = CE_CAREER[v("employGb") || p.employGb] || "";
+    // 사이트 모집분야 코드로 먼저 분류하고, 안 되면 기관명(○○도시개발공사 등)을 뺀 제목으로 분류한다
+    const r = make({
+      source: "클린아이 잡플러스", sid: p.key,
+      company: p.entName, title: p.entTitle,
+      fields: CE_FIELDS[fieldCode] || pubClassify({ title: p.entTitle || "", org: p.entName, category: CE_FIELD[fieldCode] || "", body: [position, duty].join("\n") }),
+      category: CE_FIELD[fieldCode] || "",
+      fullText: [position, duty].filter(Boolean).join("\n"),
+      duty: clip([position && `직위: ${position}`, duty].filter(Boolean).join("\n"), 450),
+      req: [career && `채용구분: ${career}`, p.localYn === "Y" && p.localName ? `지역제한: ${p.localName}` : ""].filter(Boolean).join("\n"),
+      must: lic ? `자격증: ${lic}` : "",
+      empType: CE_JOB[v("jobType") || p.jobType] || "",
+      location: place,
+      salary: CE_PAY[v("yearincome")] ? `연 ${CE_PAY[v("yearincome")]}` : "공고문 참조",
       deadline: p.deadline, url,
     });
     if (r) res.push(r);
